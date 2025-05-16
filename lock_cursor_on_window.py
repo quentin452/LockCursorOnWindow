@@ -1,6 +1,7 @@
 import ctypes
 from ctypes import wintypes
 import time
+
 user32 = ctypes.WinDLL('user32', use_last_error=True)
 kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 psapi = ctypes.WinDLL('psapi', use_last_error=True)
@@ -14,10 +15,10 @@ IDC_ARROW = 32512
 
 ID_EDIT = 101
 ID_BUTTON = 102
-
 ID_UNLOCK_BUTTON = 103  
 
 locked_rect = None
+hwnd_target = None  
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
 
@@ -113,6 +114,10 @@ GetMonitorInfo = user32.GetMonitorInfoW
 GetMonitorInfo.argtypes = [wintypes.HMONITOR, ctypes.POINTER(MONITORINFO)]
 GetMonitorInfo.restype = wintypes.BOOL
 
+GetForegroundWindow = user32.GetForegroundWindow
+GetForegroundWindow.restype = wintypes.HWND
+GetForegroundWindow.argtypes = []
+
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 PROCESS_VM_READ = 0x0010
 
@@ -175,9 +180,9 @@ def clip_cursor_to_window(hwnd_target):
     print(f"Curseur verrouillé dans la fenêtre, borné à l'écran")
     return True
 
-
 @WNDPROC
 def WndProc(hwnd, msg, wparam, lparam):
+    global hwnd_target, locked_rect
     if msg == WM_DESTROY:
         user32.PostQuitMessage(0)
         return 0
@@ -190,20 +195,24 @@ def WndProc(hwnd, msg, wparam, lparam):
             GetWindowTextW(hEdit, buffer, length + 1)
             proc_name = buffer.value.strip()
             if proc_name:
-                hwnd_target = find_hwnd_by_process_name(proc_name)
-                if hwnd_target:
+                hwnd_found = find_hwnd_by_process_name(proc_name)
+                if hwnd_found:
+                    hwnd_target = hwnd_found
                     if not clip_cursor_to_window(hwnd_target):
                         print("Erreur lors du verrouillage du curseur")
                 else:
                     print(f"Fenêtre pour '{proc_name}' non trouvée")
+                    hwnd_target = None
+                    locked_rect = None
             else:
                 print("Nom de processus vide")
         elif ctrl_id == ID_UNLOCK_BUTTON:
-            user32.ClipCursor(None)  
+            ClipCursor(None)
+            hwnd_target = None
+            locked_rect = None
             print("Curseur déverrouillé.")
         return 0
     return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
-
 
 def main():
     hInstance = kernel32.GetModuleHandleW(None)
@@ -244,6 +253,7 @@ def main():
     ES_LEFT = 0x0000
     BS_PUSHBUTTON = 0x00000000
     WS_BORDER = 0x00800000
+
     user32.CreateWindowExW(
         0,
         "EDIT",
@@ -284,27 +294,53 @@ def main():
     user32.UpdateWindow(hwnd)
 
     msg = MSG()
+    CLIP_REPEAT_INTERVAL = 0.1
     last_clip_time = 0
-    CLIP_REPEAT_INTERVAL = 0.1 
 
-    global locked_rect
+    global locked_rect, hwnd_target
 
     while True:
-        has_msg = user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1)  
+        has_msg = user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1)
         if has_msg:
             if msg.message == WM_DESTROY:
                 break
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
+        
+        if hwnd_target:
+            fg = GetForegroundWindow()
+            if fg == hwnd_target:
+                now = time.time()
+                if now - last_clip_time > CLIP_REPEAT_INTERVAL:
+                    rect = RECT()
+                    if GetWindowRect(hwnd_target, ctypes.byref(rect)):
+                        hMonitor = MonitorFromWindow(hwnd_target, MONITOR_DEFAULTTONEAREST)
+                        monitor_info = MONITORINFO()
+                        monitor_info.cbSize = ctypes.sizeof(MONITORINFO)
+                        if GetMonitorInfo(hMonitor, ctypes.byref(monitor_info)):
+                            if rect.left < monitor_info.rcMonitor.left:
+                                rect.left = monitor_info.rcMonitor.left - 1
+                            if rect.top < monitor_info.rcMonitor.top:
+                                rect.top = monitor_info.rcMonitor.top - 1
+                            if rect.right > monitor_info.rcMonitor.right:
+                                rect.right = monitor_info.rcMonitor.right - 1
+                            if rect.bottom > monitor_info.rcMonitor.bottom:
+                                rect.bottom = monitor_info.rcMonitor.bottom - 1
+                        locked_rect = rect
+                        ClipCursor(ctypes.byref(locked_rect))
+                    last_clip_time = now
+            else:
+                if locked_rect is not None:
+                    ClipCursor(None)
+                    locked_rect = None
+        else:
+            if locked_rect is not None:
+                ClipCursor(None)
+                locked_rect = None
 
-        if locked_rect:
-            now = time.time()
-            if now - last_clip_time > CLIP_REPEAT_INTERVAL:
-                ClipCursor(ctypes.byref(locked_rect))
-                last_clip_time = now
-
-        time.sleep(0.01)  
+        time.sleep(0.01)
 
     ClipCursor(None)
+
 if __name__ == "__main__":
     main()
