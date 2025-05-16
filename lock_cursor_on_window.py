@@ -249,15 +249,25 @@ def main():
             if GetWindowRect(hwnd_target, ctypes.byref(rect)):
                 now = time.time()
 
+                active_hwnd = GetForegroundWindow()
+                if active_hwnd != hwnd_target:
+                    if locked_rect is not None:
+                        ClipCursor(None)
+                        locked_rect = None
+                else:
+                    if locked_rect is None:
+                        clip_cursor_to_window(hwnd_target)
+                        in_move = False
+
                 if (rect.left != prev_rect.left or rect.top != prev_rect.top or
                     rect.right != prev_rect.right or rect.bottom != prev_rect.bottom):
-                    
+
                     if not in_move:
                         ClipCursor(None)
                         in_move = True
                         locked_rect = None
-                    
-                    last_change_time = now 
+
+                    last_change_time = now
 
                 elif in_move and (now - last_change_time > STABILITY_TIMEOUT):
                     if clip_cursor_to_window(hwnd_target):
